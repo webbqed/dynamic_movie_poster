@@ -174,8 +174,8 @@ class MoviePosterApp:
             label_text = ""
 
         test_font_size = self.title_font_size
-        test_label = tk.Label(self.frame, text=label_text, font=("Impact", test_font_size), wraplength=int(self.screen_height * 9 / 16))
-        test_label.pack()
+        test_label = tk.Label(self.root, text=label_text, font=("Impact", test_font_size), wraplength=int(self.screen_height * 9 / 16))
+        test_label.place(x=-1000, y=-1000)
         test_label.update_idletasks()
         label_width = test_label.winfo_reqwidth()
         label_height = test_label.winfo_reqheight()
