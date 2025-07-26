@@ -1,10 +1,4 @@
 # -*- coding: utf-8 -*-
-"""
-Spyder Editor
-
-This file was created by webbqed
-"""
-
 import os
 import tkinter as tk
 from PIL import Image, ImageTk
@@ -109,22 +103,27 @@ class MoviePosterApp:
 
         self.screen_width = self.root.winfo_screenwidth()
         self.screen_height = self.root.winfo_screenheight()
-
+        
         self.frame = tk.Frame(root, bg="black")
         self.frame.pack(fill="both", expand=True)
 
         self.title_font_size = int(self.screen_height * 0.04)
+        
+        self.fixed_title_height = int(self.screen_height * 0.08)
+        self.title_border = tk.Frame(self.frame, bg="black", height=self.fixed_title_height + int(self.screen_height * 0.06), highlightthickness=12, highlightbackground="#FFD700")
+        self.title_border.pack(fill="x", padx=0, pady=(self.screen_height * 0.02, self.screen_height * 0.02))
+
         self.title_label = tk.Label(
-            self.frame,
+            self.title_border,
             text="",
             font=("Impact", self.title_font_size),
-            fg="#D4AF37",
+            fg="#FFD700",
             bg="black",
             wraplength=int(self.screen_height * 9 / 16),
             justify="center"
         )
-        self.title_label.pack(pady=(self.screen_height * 0.02, self.screen_height * 0.02))
-
+        self.title_label.pack(padx=4, pady=4)
+        
         self.canvas = tk.Label(self.frame, bg="black")
         self.canvas.pack(fill="both", expand=True)
 
@@ -173,12 +172,24 @@ class MoviePosterApp:
         
         else:
             label_text = ""
-        self.title_label.config(text=label_text)
-        # Adjust font size if the text is too wide
-        self.title_label.update_idletasks()
-        label_width = self.title_label.winfo_reqwidth()
+
+        test_font_size = self.title_font_size
+        test_label = tk.Label(self.frame, text=label_text, font=("Impact", test_font_size), wraplength=int(self.screen_height * 9 / 16))
+        test_label.pack()
+        test_label.update_idletasks()
+        label_width = test_label.winfo_reqwidth()
+        label_height = test_label.winfo_reqheight()
         poster_width = int(self.screen_height * 9 / 16)
-        while label_width > poster_width and self.title_font_size > 10:
+        while (label_width > poster_width or label_height > self.fixed_title_height) and test_font_size > 10:
+            test_font_size -= 1
+            test_label.config(font=("Impact", test_font_size))
+            test_label.update_idletasks()
+            label_width = test_label.winfo_reqwidth()
+            label_height = test_label.winfo_reqheight()
+        test_label.destroy()
+        self.title_label.config(text=label_text, font=("Impact", test_font_size))
+        poster_width = int(self.screen_height * 9 / 16)
+        while (label_width > poster_width or self.title_label.winfo_height() > self.fixed_title_height) and self.title_font_size > 10:
             self.title_font_size -= 1
             self.title_label.config(font=("Impact", self.title_font_size))
             self.title_label.update_idletasks()
@@ -262,7 +273,10 @@ if __name__ == "__main__":
 
     movies = now_playing + coming_soon + now_streaming
     random.shuffle(movies)
-    movies = [m for m in movies if m.get("poster_path")]
+    movies = [
+        m for m in movies
+        if m.get("poster_path") and get_poster_image(m["poster_path"]) and get_poster_image(m["poster_path"]).width >= 1500
+    ]
 
     root = tk.Tk()
     app = MoviePosterApp(root, movies)
