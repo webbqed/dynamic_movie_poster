@@ -135,16 +135,20 @@ class MoviePosterApp:
         self.canvas.bind("<Button-1>", self.open_trailer)
 
         close_button = tk.Button(
-            self.frame,
+            self.title_border,
             text="✕",
             font=("Arial", 12, "bold"),
             fg="#111111",
             bg="black",
+            activebackground="black",
+            activeforeground="#111111",
             borderwidth=0,
+            highlightthickness=0,
+            relief="flat",
             command=self.root.destroy,
             cursor="hand2"
         )
-        close_button.place(relx=0.98, rely=0.02, anchor="ne")
+        close_button.place(relx=1.0, y=1, anchor="ne")
 
         self.root.after(100, self.update_display)
         self.schedule_daily_refresh()
