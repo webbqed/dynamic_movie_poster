@@ -68,6 +68,26 @@ def get_poster_image(poster_path):
 
 # Main GUI application class
 class MoviePosterApp:
+    def refresh_movies(self):
+        now_playing = fetch_movies("now_playing")
+        coming_soon = []
+        for page in range(1, 6):
+            batch = fetch_movies("upcoming", page=page)
+            filtered = [
+                movie for movie in batch
+                if movie.get("release_date") and datetime.strptime(movie["release_date"], "%Y-%m-%d").date() > datetime.today().date()
+            ]
+            coming_soon.extend(filtered)
+        if len(coming_soon) > 20:
+            coming_soon = coming_soon[:20]
+
+        now_streaming = [m for m in fetch_movies("popular") if get_streaming_provider(m["id"]) is not None]
+        self.movies = [*now_playing, *coming_soon, *now_streaming]
+        random.shuffle(self.movies)
+        self.movies = [m for m in self.movies if m.get("poster_path")]
+        self.index = 0
+        self.update_display()
+        self.schedule_daily_refresh()
     def toggle_fullscreen(self):
         self.fullscreen = not self.fullscreen
         self.root.attributes("-fullscreen", self.fullscreen)
@@ -111,7 +131,7 @@ class MoviePosterApp:
             self.frame,
             text="✕",
             font=("Arial", 12, "bold"),
-            fg="#444444",
+            fg="#111111f",
             bg="black",
             borderwidth=0,
             command=self.root.destroy,
@@ -140,8 +160,7 @@ class MoviePosterApp:
         elif category == "popular":
             provider = get_streaming_provider(movie["id"])
             label_text = f"Now Streaming on {provider}" if provider else "Now Streaming"
-        elif category == "top_rated":
-            label_text = "Coming to Streaming"
+        
         else:
             label_text = ""
         self.title_label.config(text=label_text)
@@ -156,7 +175,7 @@ class MoviePosterApp:
             label_width = self.title_label.winfo_reqwidth()
 
         img = get_poster_image(movie["poster_path"])
-        if img:
+        if img and img.width >= 600:
             canvas_width = self.canvas.winfo_width()
             canvas_height = self.canvas.winfo_height()
 
@@ -180,7 +199,7 @@ class MoviePosterApp:
                 new_height = int(new_width / img_ratio)
 
             if new_width > 0 and new_height > 0:
-                img = img.resize((int(new_width), int(new_height)), Image.Resampling.LANCZOS)
+                img = img.resize((int(new_width), int(new_height)), Image.LANCZOS)
                 self.photo = ImageTk.PhotoImage(img)
                 self.canvas.config(image=self.photo)
 
@@ -201,29 +220,9 @@ class MoviePosterApp:
         delay_ms = int((next_refresh - now).total_seconds() * 1000)
         self.root.after(delay_ms, self.refresh_movies)
 
-    def refresh_movies(self):
-        now_playing = fetch_movies("now_playing")
-        coming_soon = []
-        for page in range(1, 6):
-            batch = fetch_movies("upcoming", page=page)
-            filtered = [
-                movie for movie in batch
-                if movie.get("release_date") and datetime.strptime(movie["release_date"], "%Y-%m-%d").date() > datetime.today().date()
-            ]
-            coming_soon.extend(filtered)
-        if len(coming_soon) > 20:
-            coming_soon = coming_soon[:20]
 
-        now_streaming = fetch_movies("popular")
-        coming_to_streaming = fetch_movies("top_rated")
-        import random
-        self.movies = [*now_playing, *coming_soon, *now_streaming, *coming_to_streaming]
-        random.shuffle(self.movies)
-        self.movies = [m for m in self.movies if m.get("poster_path")]
-        self.index = 0
-        self.update_display()
-        self.schedule_daily_refresh()
 
+import random
 
 if __name__ == "__main__":
     now_playing = fetch_movies("now_playing")
@@ -232,9 +231,7 @@ if __name__ == "__main__":
         if movie.get("release_date") and datetime.strptime(movie["release_date"], "%Y-%m-%d").date() > datetime.today().date()
     ]
     now_streaming = fetch_movies("popular")
-    coming_to_streaming = fetch_movies("top_rated")
-    import random
-    movies = now_playing + coming_soon + now_streaming + coming_to_streaming
+    movies = now_playing + coming_soon + now_streaming
     random.shuffle(movies)
 
     movies = [m for m in movies if m.get("poster_path")]
