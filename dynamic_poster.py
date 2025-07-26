@@ -7,7 +7,6 @@ This file was created by webbqed
 
 import os
 import tkinter as tk
-from tkinter import ttk
 from PIL import Image, ImageTk
 import requests
 from io import BytesIO
@@ -70,6 +69,7 @@ def get_poster_image(poster_path):
 class MoviePosterApp:
     def refresh_movies(self):
         now_playing = fetch_movies("now_playing")
+
         coming_soon = []
         for page in range(1, 6):
             batch = fetch_movies("upcoming", page=page)
@@ -81,7 +81,14 @@ class MoviePosterApp:
         if len(coming_soon) > 20:
             coming_soon = coming_soon[:20]
 
-        now_streaming = [m for m in fetch_movies("popular") if get_streaming_provider(m["id"]) is not None]
+        now_streaming = []
+        for page in range(1, 6):
+            batch = fetch_movies("popular", page=page)
+            filtered = [m for m in batch if get_streaming_provider(m["id"]) is not None]
+            now_streaming.extend(filtered)
+        if len(now_streaming) > 20:
+            now_streaming = now_streaming[:20]
+
         self.movies = [*now_playing, *coming_soon, *now_streaming]
         random.shuffle(self.movies)
         self.movies = [m for m in self.movies if m.get("poster_path")]
@@ -233,14 +240,28 @@ import random
 
 if __name__ == "__main__":
     now_playing = fetch_movies("now_playing")
-    coming_soon = [
-        movie for movie in fetch_movies("upcoming")
-        if movie.get("release_date") and datetime.strptime(movie["release_date"], "%Y-%m-%d").date() > datetime.today().date()
-    ]
-    now_streaming = [m for m in fetch_movies("popular") if get_streaming_provider(m["id"]) is not None]
+
+    coming_soon = []
+    for page in range(1, 6):
+        batch = fetch_movies("upcoming", page=page)
+        filtered = [
+            movie for movie in batch
+            if movie.get("release_date") and datetime.strptime(movie["release_date"], "%Y-%m-%d").date() > datetime.today().date()
+        ]
+        coming_soon.extend(filtered)
+    if len(coming_soon) > 20:
+        coming_soon = coming_soon[:20]
+
+    now_streaming = []
+    for page in range(1, 6):
+        batch = fetch_movies("popular", page=page)
+        filtered = [m for m in batch if get_streaming_provider(m["id"]) is not None]
+        now_streaming.extend(filtered)
+    if len(now_streaming) > 20:
+        now_streaming = now_streaming[:20]
+
     movies = now_playing + coming_soon + now_streaming
     random.shuffle(movies)
-
     movies = [m for m in movies if m.get("poster_path")]
 
     root = tk.Tk()
