@@ -237,7 +237,7 @@ if __name__ == "__main__":
         movie for movie in fetch_movies("upcoming")
         if movie.get("release_date") and datetime.strptime(movie["release_date"], "%Y-%m-%d").date() > datetime.today().date()
     ]
-    now_streaming = fetch_movies("popular")
+    now_streaming = [m for m in fetch_movies("popular") if get_streaming_provider(m["id"]) is not None]
     movies = now_playing + coming_soon + now_streaming
     random.shuffle(movies)
 
