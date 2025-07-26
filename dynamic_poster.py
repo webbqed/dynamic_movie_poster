@@ -152,6 +152,8 @@ class MoviePosterApp:
             return
 
         movie = self.movies[self.index]
+
+        # Pre-check image validity before updating text
         category = movie.get("category")
         if category == "now_playing":
             label_text = "In Theaters Now"
@@ -175,33 +177,37 @@ class MoviePosterApp:
             label_width = self.title_label.winfo_reqwidth()
 
         img = get_poster_image(movie["poster_path"])
-        if img and img.width >= 600:
-            canvas_width = self.canvas.winfo_width()
-            canvas_height = self.canvas.winfo_height()
+        if not img or img.width < 1500:
+            self.index = (self.index + 1) % len(self.movies)
+            self.update_display()
+            return
 
-            if canvas_width == 0 or canvas_height == 0:
-                self.root.after(100, self.update_display)
-                return
+        canvas_width = self.canvas.winfo_width()
+        canvas_height = self.canvas.winfo_height()
 
-            total_height = self.screen_height
-            target_width = int(total_height * 9 / 16)
+        if canvas_width == 0 or canvas_height == 0:
+            self.root.after(100, self.update_display)
+            return
 
-            text_height = self.title_label.winfo_reqheight()
-            vertical_padding = self.screen_height * 0.02 * 2
-            max_image_height = total_height - text_height - vertical_padding
+        total_height = self.screen_height
+        target_width = int(total_height * 9 / 16)
 
-            img_ratio = img.width / img.height
-            new_height = max_image_height
-            new_width = int(new_height * img_ratio)
+        text_height = self.title_label.winfo_reqheight()
+        vertical_padding = self.screen_height * 0.02 * 2
+        max_image_height = total_height - text_height - vertical_padding
 
-            if new_width > target_width:
-                new_width = target_width
-                new_height = int(new_width / img_ratio)
+        img_ratio = img.width / img.height
+        new_height = max_image_height
+        new_width = int(new_height * img_ratio)
 
-            if new_width > 0 and new_height > 0:
-                img = img.resize((int(new_width), int(new_height)), Image.LANCZOS)
-                self.photo = ImageTk.PhotoImage(img)
-                self.canvas.config(image=self.photo)
+        if new_width > target_width:
+            new_width = target_width
+            new_height = int(new_width / img_ratio)
+
+        if new_width > 0 and new_height > 0:
+            img = img.resize((int(new_width), int(new_height)), Image.LANCZOS)
+            self.photo = ImageTk.PhotoImage(img)
+            self.canvas.config(image=self.photo)
 
         self.index = (self.index + 1) % len(self.movies)
         self.timer = self.root.after(10000, self.update_display)
