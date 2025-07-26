@@ -131,7 +131,7 @@ class MoviePosterApp:
             self.frame,
             text="✕",
             font=("Arial", 12, "bold"),
-            fg="#111111f",
+            fg="#111111",
             bg="black",
             borderwidth=0,
             command=self.root.destroy,
