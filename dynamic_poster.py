@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 import os
+import sys
 import tkinter as tk
 from PIL import Image, ImageTk
 import requests
@@ -89,6 +90,7 @@ class MoviePosterApp:
         self.index = 0
         self.update_display()
         self.schedule_daily_refresh()
+        self.schedule_auto_restart()
         os.system("shutdown /r /t 5")
     def toggle_fullscreen(self):
         self.fullscreen = not self.fullscreen
@@ -109,7 +111,7 @@ class MoviePosterApp:
 
         self.title_font_size = int(self.screen_height * 0.04)
         
-        self.fixed_title_height = int(self.screen_height * 0.08)
+        self.fixed_title_height = int(self.screen_height * 0.10)
         self.title_border = tk.Frame(self.frame, bg="black", height=self.fixed_title_height + int(self.screen_height * 0.06), highlightthickness=12, highlightbackground="#FFD700", bd=0, relief="flat")
         self.title_border.pack(fill="x", expand=False, padx=0, pady=(0, 0))
 
@@ -240,6 +242,13 @@ class MoviePosterApp:
         trailer_url = get_trailer_url(movie["id"])
         if trailer_url:
             webbrowser.open(trailer_url)
+
+    def schedule_auto_restart(self):
+        four_hours_ms = 4 * 60 * 60 * 1000
+        self.root.after(four_hours_ms, self.restart_app)
+
+    def restart_app(self):
+        os.execl(sys.executable, sys.executable, *sys.argv)
 
     def schedule_daily_refresh(self):
         now = datetime.now()
