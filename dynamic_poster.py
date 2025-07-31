@@ -125,15 +125,16 @@ class MoviePosterApp:
         )
         self.title_label.pack(padx=4, pady=4)
         
-        self.canvas = tk.Label(self.frame, bg="black")
+        self.canvas = tk.Label(self.frame, bg="black")  # Main poster area with tap detection
         self.canvas.pack(fill="both", expand=True)
+        self.canvas.bind("<Button-1>", self.handle_click)
 
         self.root.configure(bg="black")
         self.root.bind("<Escape>", lambda e: self.root.destroy())
         self.root.bind("<f>", lambda e: self.toggle_fullscreen())
         self.root.bind("<Right>", lambda e: self.skip_to_next())
         self.fullscreen = True
-        self.canvas.bind("<Button-1>", self.open_trailer)
+        # self.canvas.bind("<Button-1>", self.open_trailer)
 
         close_button = tk.Button(
             self.title_border,
@@ -236,6 +237,24 @@ class MoviePosterApp:
         self.index = (self.index + 1) % len(self.movies)
         self.timer = self.root.after(15000, self.update_display)
 
+    def handle_click(self, event):
+        width = self.canvas.winfo_width()
+        if width == 0:
+            return
+
+        left_trigger = int(width * 0.15)
+        right_trigger = int(width * 0.85)
+
+        if event.x < left_trigger:
+            self.index = (self.index - 2) % len(self.movies)
+            self.root.after_cancel(self.timer)
+            self.update_display()
+        elif event.x > right_trigger:
+            self.root.after_cancel(self.timer)
+            self.update_display()
+        else:
+            self.open_trailer(event)
+
     def open_trailer(self, event):
         movie = self.movies[(self.index - 1) % len(self.movies)]
         trailer_url = get_trailer_url(movie["id"])
@@ -293,4 +312,3 @@ if __name__ == "__main__":
     root = tk.Tk()
     app = MoviePosterApp(root, movies)
     root.mainloop()
-
