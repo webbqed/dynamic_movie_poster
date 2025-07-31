@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 import os
 import sys
 import tkinter as tk
@@ -118,7 +117,7 @@ class MoviePosterApp:
         self.title_label = tk.Label(
             self.title_border,
             text="",
-            font=("Impact", self.title_font_size),
+            font=("Broadway", self.title_font_size),
             fg="#FFD700",
             bg="black",
             wraplength=int(self.screen_height * 9 / 16),
@@ -180,7 +179,7 @@ class MoviePosterApp:
             label_text = ""
 
         test_font_size = self.title_font_size
-        test_label = tk.Label(self.root, text=label_text, font=("Impact", test_font_size), wraplength=int(self.screen_height * 9 / 16))
+        test_label = tk.Label(self.root, text=label_text, font=("Broadway", test_font_size), wraplength=int(self.screen_height * 9 / 16))
         test_label.place(x=-1000, y=-1000)
         test_label.update_idletasks()
         label_width = test_label.winfo_reqwidth()
@@ -188,16 +187,16 @@ class MoviePosterApp:
         poster_width = int(self.screen_height * 9 / 16)
         while (label_width > poster_width or label_height > self.fixed_title_height) and test_font_size > 10:
             test_font_size -= 1
-            test_label.config(font=("Impact", test_font_size))
+            test_label.config(font=("Broadway", test_font_size))
             test_label.update_idletasks()
             label_width = test_label.winfo_reqwidth()
             label_height = test_label.winfo_reqheight()
         test_label.destroy()
-        self.title_label.config(text=label_text, font=("Impact", test_font_size))
+        self.title_label.config(text=label_text, font=("Broadway", test_font_size))
         poster_width = int(self.screen_height * 9 / 16)
         while (label_width > poster_width or self.title_label.winfo_height() > self.fixed_title_height) and self.title_font_size > 10:
             self.title_font_size -= 1
-            self.title_label.config(font=("Impact", self.title_font_size))
+            self.title_label.config(font=("Broadway", self.title_font_size))
             self.title_label.update_idletasks()
             label_width = self.title_label.winfo_reqwidth()
 
