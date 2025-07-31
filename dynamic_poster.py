@@ -234,7 +234,7 @@ class MoviePosterApp:
             self.canvas.config(image=self.photo)
 
         self.index = (self.index + 1) % len(self.movies)
-        self.timer = self.root.after(10000, self.update_display)
+        self.timer = self.root.after(15000, self.update_display)
 
     def open_trailer(self, event):
         movie = self.movies[(self.index - 1) % len(self.movies)]
@@ -293,3 +293,4 @@ if __name__ == "__main__":
     root = tk.Tk()
     app = MoviePosterApp(root, movies)
     root.mainloop()
+
