@@ -8,6 +8,13 @@ import webbrowser
 from datetime import datetime, timedelta
 import time
 
+# Ensure working directory is the script's location
+os.chdir(os.path.dirname(os.path.abspath(__file__)))
+
+# Ensure cache directory exists
+if not os.path.exists("cache"):
+    os.makedirs("cache")
+
 API_KEY = "30fecaf583412f4f4d044dd98b22f97f"  # Replace this with your actual TMDb API key
 BASE_URL = "https://api.themoviedb.org/3"
 POSTER_BASE_URL = "https://image.tmdb.org/t/p/original"
@@ -50,13 +57,21 @@ def get_streaming_provider(movie_id, region="US"):
     provider_cache[movie_id] = None
     return None
 
-# Download and return poster image
+# Download and return poster image with caching
 def get_poster_image(poster_path):
+    cache_path = os.path.join("cache", os.path.basename(poster_path))
+    if os.path.exists(cache_path):
+        try:
+            return Image.open(cache_path)
+        except Exception:
+            pass
+
     url = f"{POSTER_BASE_URL}{poster_path}"
     response = requests.get(url)
     if response.status_code == 200:
-        img_data = BytesIO(response.content)
-        return Image.open(img_data)
+        with open(cache_path, "wb") as f:
+            f.write(response.content)
+        return Image.open(BytesIO(response.content))
     return None
 
 # Main GUI application class
@@ -91,6 +106,7 @@ class MoviePosterApp:
         self.schedule_daily_refresh()
         self.schedule_auto_restart()
         os.system("shutdown /r /t 5")
+
     def toggle_fullscreen(self):
         self.fullscreen = not self.fullscreen
         self.root.attributes("-fullscreen", self.fullscreen)
