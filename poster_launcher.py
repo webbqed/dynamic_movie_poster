@@ -6,9 +6,9 @@ import os
 
 # Set these paths to your actual environment and script
 PYTHONW_PATH = r"C:\Users\Sean\AppData\Local\spyder-6\envs\spyder-runtime\pythonw.exe"
-SCRIPT_PATH = r"C:\Users\Sean\Desktop\random python scripts\dynamic_poster.py"
+SCRIPT_PATH = r"C:\Users\Sean\Desktop\Python Scripts\dynamic_poster.py"
 
-SPLASH_IMAGE = "splash_theater.png"  # Save the image with this name in the same folder
+SPLASH_IMAGE = r"C:\Users\Sean\Desktop\Python Scripts\splash_theater.png"  # Save the image with this name in the same folder
 
 
 def launch_app():
