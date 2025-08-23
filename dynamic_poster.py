@@ -1,112 +1,244 @@
+# Dynamic Movie Poster App (Restored with Debugging + Govee Color Sync)
+# ---------------------------------------------------------------
 import os
 import sys
 import tkinter as tk
 from PIL import Image, ImageTk
 import requests
 from io import BytesIO
-import webbrowser
 from datetime import datetime, timedelta
-import time
+import webbrowser
+import json
+import threading
+import random
 
-# Ensure working directory is the script's location
+# =====================================
+# Working directory & cache setup
+# =====================================
 os.chdir(os.path.dirname(os.path.abspath(__file__)))
-
-# Ensure cache directory exists
 if not os.path.exists("cache"):
     os.makedirs("cache")
+COLOR_CACHE_PATH = os.path.join("cache", "color_cache.json")
 
-API_KEY = "30fecaf583412f4f4d044dd98b22f97f"  # Replace this with your actual TMDb API key
+# ---- Debug helpers ----
+DEBUG = True
+
+def log(*args):
+    if DEBUG:
+        print("[DEBUG]", *args)
+
+# Load/save color cache (poster_path filename -> {r,g,b})
+try:
+    with open(COLOR_CACHE_PATH, "r", encoding="utf-8") as f:
+        COLOR_CACHE = json.load(f)
+except Exception:
+    COLOR_CACHE = {}
+
+def _save_color_cache():
+    try:
+        with open(COLOR_CACHE_PATH, "w", encoding="utf-8") as f:
+            json.dump(COLOR_CACHE, f)
+    except Exception as e:
+        log("Color cache save failed:", e)
+
+# =====================================
+# TMDb API
+# =====================================
+API_KEY = "30fecaf583412f4f4d044dd98b22f97f"  # your TMDb API key
 BASE_URL = "https://api.themoviedb.org/3"
 POSTER_BASE_URL = "https://image.tmdb.org/t/p/original"
 
-# Fetch now playing and upcoming movies
+
 def fetch_movies(category="now_playing", page=1):
     url = f"{BASE_URL}/movie/{category}?api_key={API_KEY}&language=en-US&page={page}"
-    response = requests.get(url)
-    results = response.json().get("results", [])
-    for movie in results:
-        movie["category"] = category  # Add category info to each movie
+    try:
+        resp = requests.get(url, timeout=10)
+        if resp.status_code != 200:
+            log(f"TMDb {category} page {page} HTTP {resp.status_code}: {resp.text[:200]}")
+            return []
+        data = resp.json()
+    except Exception as e:
+        log(f"TMDb {category} page {page} request/json error: {e}")
+        return []
+
+    results = data.get("results", [])
+    for m in results:
+        m["category"] = category
+    log(f"Fetched {len(results)} from {category} (page {page})")
     return results
 
-# Get trailer URL for a specific movie ID
+
 def get_trailer_url(movie_id):
     url = f"{BASE_URL}/movie/{movie_id}/videos?api_key={API_KEY}"
-    response = requests.get(url)
-    for video in response.json().get("results", []):
-        if video["site"] == "YouTube" and video["type"] == "Trailer":
-            return f"https://www.yout-ube.com/embed/{video['key']}?autoplay=1"
+    try:
+        resp = requests.get(url, timeout=10)
+        if resp.status_code != 200:
+            log(f"Trailer HTTP {resp.status_code} for {movie_id}: {resp.text[:200]}")
+            return None
+        for video in resp.json().get("results", []):
+            if video.get("site") == "YouTube" and video.get("type") == "Trailer":
+                return f"https://www.youtube.com/embed/{video['key']}?autoplay=1"
+    except Exception as e:
+        log(f"Trailer fetch error for {movie_id}: {e}")
     return None
 
-# Get streaming provider name for a specific movie ID
+# Provider cache
 provider_cache = {}
 
 def get_streaming_provider(movie_id, region="US"):
     if movie_id in provider_cache:
         return provider_cache[movie_id]
-
     url = f"{BASE_URL}/movie/{movie_id}/watch/providers?api_key={API_KEY}"
-    response = requests.get(url)
-    data = response.json().get("results", {})
-    region_data = data.get(region, {})
-    flatrate = region_data.get("flatrate")
-    if flatrate:
-        provider = flatrate[0].get("provider_name")
+    try:
+        resp = requests.get(url, timeout=10)
+        if resp.status_code != 200:
+            log(f"Providers HTTP {resp.status_code} for {movie_id}: {resp.text[:200]}")
+            provider_cache[movie_id] = None
+            return None
+        data = resp.json().get("results", {})
+        region_data = data.get(region, {})
+        flatrate = region_data.get("flatrate")
+        provider = flatrate[0].get("provider_name") if flatrate else None
         provider_cache[movie_id] = provider
         return provider
+    except Exception as e:
+        log(f"Providers error for {movie_id}: {e}")
+        provider_cache[movie_id] = None
+        return None
 
-    provider_cache[movie_id] = None
-    return None
+# =====================================
+# Posters & Colors
+# =====================================
 
-# Download and return poster image with caching
 def get_poster_image(poster_path):
+    """Download and return poster image with caching."""
     cache_path = os.path.join("cache", os.path.basename(poster_path))
     if os.path.exists(cache_path):
         try:
-            return Image.open(cache_path)
-        except Exception:
-            pass
+            img = Image.open(cache_path)
+            img.load()
+            return img
+        except Exception as e:
+            log(f"Cached image open failed {cache_path}: {e}")
+            try:
+                os.remove(cache_path)
+            except Exception:
+                pass
 
     url = f"{POSTER_BASE_URL}{poster_path}"
-    response = requests.get(url)
-    if response.status_code == 200:
+    try:
+        resp = requests.get(url, timeout=15)
+        if resp.status_code != 200:
+            log(f"Poster HTTP {resp.status_code} {poster_path}: {resp.text[:200]}")
+            return None
         with open(cache_path, "wb") as f:
-            f.write(response.content)
-        return Image.open(BytesIO(response.content))
-    return None
+            f.write(resp.content)
+        img = Image.open(BytesIO(resp.content))
+        img.load()
+        log(f"Cached poster {cache_path} size={img.width}x{img.height}")
+        return img
+    except Exception as e:
+        log(f"Poster download/open failed {poster_path}: {e}")
+        return None
 
-# Main GUI application class
+
+def _compute_dominant_color(img):
+    """Compute a quick dominant RGB color for the given PIL image.
+    - Downscale to speed up.
+    - Ignore very dark/very bright pixels to avoid black bars/white borders.
+    """
+    if img.mode not in ("RGB", "RGBA"):
+        img = img.convert("RGBA")
+    else:
+        img = img.copy()
+
+    img.thumbnail((200, 200), Image.LANCZOS)
+
+    pixels = list(img.getdata())
+    rgb_pixels = []
+    for p in pixels:
+        if len(p) == 4:
+            r, g, b, a = p
+            if a < 16:
+                continue
+        else:
+            r, g, b = p
+        s = r + g + b
+        if 30 <= s <= 735:
+            rgb_pixels.append((r, g, b))
+
+    if not rgb_pixels:
+        rgb_pixels = [p[:3] if isinstance(p, tuple) and len(p) == 4 else p for p in pixels][:1000]
+
+    quantized = img.convert("RGB").quantize(colors=8, method=Image.MEDIANCUT)
+    palette = quantized.getpalette()
+    color_counts = quantized.getcolors()
+    if color_counts and palette:
+        idx = max(color_counts, key=lambda x: x[0])[1]
+        r = palette[3 * idx]
+        g = palette[3 * idx + 1]
+        b = palette[3 * idx + 2]
+        return {"r": int(r), "g": int(g), "b": int(b)}
+
+    n = len(rgb_pixels)
+    r = sum(p[0] for p in rgb_pixels) // max(n, 1)
+    g = sum(p[1] for p in rgb_pixels) // max(n, 1)
+    b = sum(p[2] for p in rgb_pixels) // max(n, 1)
+    return {"r": int(r), "g": int(g), "b": int(b)}
+
+
+def get_or_compute_dominant_color(poster_path):
+    key = os.path.basename(poster_path)
+    cached = COLOR_CACHE.get(key)
+    if cached and all(k in cached for k in ("r", "g", "b")):
+        return cached
+    img = get_poster_image(poster_path)
+    if img is None:
+        return {"r": 0, "g": 0, "b": 0}
+    color = _compute_dominant_color(img)
+    COLOR_CACHE[key] = color
+    _save_color_cache()
+    return color
+
+# =====================================
+# Govee Cloud API (simple)
+# =====================================
+GOVEE_API_KEY = os.environ.get("GOVEE_API_KEY", "")
+GOVEE_DEVICE = os.environ.get("GOVEE_DEVICE", "")     # e.g. "aa:bb:..."
+GOVEE_MODEL  = os.environ.get("GOVEE_MODEL", "")       # e.g. "H6159"
+GOVEE_CONTROL_URL = "https://developer-api.govee.com/v1/devices/control"
+
+
+def set_govee_color(rgb):
+    """Set the Govee light color using the Cloud API. Expects rgb dict {r,g,b}."""
+    if not (GOVEE_API_KEY and GOVEE_DEVICE and GOVEE_MODEL):
+        log("Govee not configured; skipping color set.")
+        return
+
+    payload = {
+        "device": GOVEE_DEVICE,
+        "model": GOVEE_MODEL,
+        "cmd": {
+            "name": "color",
+            "value": {"r": int(rgb["r"]), "g": int(rgb["g"]), "b": int(rgb["b"])}
+        }
+    }
+    headers = {
+        "Govee-API-Key": GOVEE_API_KEY,
+        "Content-Type": "application/json"
+    }
+    try:
+        # Use PUT (POST will return 405)
+        r = requests.put(GOVEE_CONTROL_URL, headers=headers, json=payload, timeout=5)
+        if r.status_code != 200:
+            log(f"Govee color HTTP {r.status_code}: {r.text[:300]}")
+    except Exception as e:
+        log("Govee color request failed:", e)
+
+# =====================================
+# GUI Application
+# =====================================
 class MoviePosterApp:
-    def refresh_movies(self):
-        now_playing = fetch_movies("now_playing")
-
-        coming_soon = []
-        for page in range(1, 6):
-            batch = fetch_movies("upcoming", page=page)
-            filtered = [
-                movie for movie in batch
-                if movie.get("release_date") and datetime.strptime(movie["release_date"], "%Y-%m-%d").date() > datetime.today().date()
-            ]
-            coming_soon.extend(filtered)
-        if len(coming_soon) > 20:
-            coming_soon = coming_soon[:20]
-
-        now_streaming = []
-        for page in range(1, 6):
-            batch = fetch_movies("popular", page=page)
-            filtered = [m for m in batch if get_streaming_provider(m["id"]) is not None]
-            now_streaming.extend(filtered)
-        if len(now_streaming) > 20:
-            now_streaming = now_streaming[:20]
-
-        self.movies = [*now_playing, *coming_soon, *now_streaming]
-        random.shuffle(self.movies)
-        self.movies = [m for m in self.movies if m.get("poster_path")]
-        self.index = 0
-        self.update_display()
-        self.schedule_daily_refresh()
-        self.schedule_auto_restart()
-        os.system("shutdown /r /t 5")
-
     def toggle_fullscreen(self):
         self.fullscreen = not self.fullscreen
         self.root.attributes("-fullscreen", self.fullscreen)
@@ -120,14 +252,22 @@ class MoviePosterApp:
 
         self.screen_width = self.root.winfo_screenwidth()
         self.screen_height = self.root.winfo_screenheight()
-        
+
         self.frame = tk.Frame(root, bg="black")
         self.frame.pack(fill="both", expand=True)
 
         self.title_font_size = int(self.screen_height * 0.04)
-        
         self.fixed_title_height = int(self.screen_height * 0.10)
-        self.title_border = tk.Frame(self.frame, bg="black", height=self.fixed_title_height + int(self.screen_height * 0.06), highlightthickness=12, highlightbackground="#D4AF37", bd=0, relief="flat")
+
+        self.title_border = tk.Frame(
+            self.frame,
+            bg="black",
+            height=self.fixed_title_height + int(self.screen_height * 0.06),
+            highlightthickness=12,
+            highlightbackground="#D4AF37",
+            bd=0,
+            relief="flat"
+        )
         self.title_border.pack(fill="x", expand=False, padx=0, pady=(0, 0))
 
         self.title_label = tk.Label(
@@ -140,8 +280,8 @@ class MoviePosterApp:
             justify="center"
         )
         self.title_label.pack(padx=4, pady=4)
-        
-        self.canvas = tk.Label(self.frame, bg="black")  # Main poster area with tap detection
+
+        self.canvas = tk.Label(self.frame, bg="black")
         self.canvas.pack(fill="both", expand=True)
         self.canvas.bind("<Button-1>", self.handle_click)
 
@@ -150,7 +290,6 @@ class MoviePosterApp:
         self.root.bind("<f>", lambda e: self.toggle_fullscreen())
         self.root.bind("<Right>", lambda e: self.skip_to_next())
         self.fullscreen = True
-        # self.canvas.bind("<Button-1>", self.open_trailer)
 
         close_button = tk.Button(
             self.title_border,
@@ -170,31 +309,35 @@ class MoviePosterApp:
 
         self.root.after(100, self.update_display)
         self.schedule_daily_refresh()
+        self.schedule_auto_restart()
 
     def skip_to_next(self):
-        self.root.after_cancel(self.timer)
+        if hasattr(self, 'timer'):
+            self.root.after_cancel(self.timer)
         self.update_display()
+
+    def _update_govee_async(self, rgb):
+        threading.Thread(target=set_govee_color, args=(rgb,), daemon=True).start()
 
     def update_display(self):
         if not self.movies:
+            log("UI: No movies available (self.movies is empty).")
             self.title_label.config(text="No movies available.")
             return
 
         movie = self.movies[self.index]
-
-        # Pre-check image validity before updating text
         category = movie.get("category")
         if category == "now_playing":
             label_text = "In Theaters Now"
         elif category == "upcoming":
             label_text = "Coming to Theaters"
         elif category == "popular":
-            provider = get_streaming_provider(movie["id"])
+            provider = get_streaming_provider(movie["id"])  # cached after first call
             label_text = f"Now Streaming on {provider}" if provider else "Now Streaming"
-        
         else:
             label_text = ""
 
+        # Fit title font to border
         test_font_size = self.title_font_size
         test_label = tk.Label(self.root, text=label_text, font=("Broadway", test_font_size), wraplength=int(self.screen_height * 9 / 16))
         test_label.place(x=-1000, y=-1000)
@@ -210,22 +353,17 @@ class MoviePosterApp:
             label_height = test_label.winfo_reqheight()
         test_label.destroy()
         self.title_label.config(text=label_text, font=("Broadway", test_font_size))
-        poster_width = int(self.screen_height * 9 / 16)
-        while (label_width > poster_width or self.title_label.winfo_height() > self.fixed_title_height) and self.title_font_size > 10:
-            self.title_font_size -= 1
-            self.title_label.config(font=("Broadway", self.title_font_size))
-            self.title_label.update_idletasks()
-            label_width = self.title_label.winfo_reqwidth()
 
+        # Prepare poster image
         img = get_poster_image(movie["poster_path"])
-        if not img or img.width < 1500:
+        if not img or img.width < 800:  # relaxed threshold for robustness
+            log(f"Skipping poster for {movie.get('title','?')} (missing or small: {getattr(img,'width',0)}px)")
             self.index = (self.index + 1) % len(self.movies)
             self.update_display()
             return
 
         canvas_width = self.canvas.winfo_width()
         canvas_height = self.canvas.winfo_height()
-
         if canvas_width == 0 or canvas_height == 0:
             self.root.after(100, self.update_display)
             return
@@ -250,6 +388,10 @@ class MoviePosterApp:
             self.photo = ImageTk.PhotoImage(img)
             self.canvas.config(image=self.photo)
 
+        # Update Govee immediately (dominant color precomputed at load time when possible)
+        rgb = movie.get("dominant_color") or get_or_compute_dominant_color(movie["poster_path"])
+        self._update_govee_async(rgb)
+
         self.index = (self.index + 1) % len(self.movies)
         self.timer = self.root.after(15000, self.update_display)
 
@@ -257,16 +399,16 @@ class MoviePosterApp:
         width = self.canvas.winfo_width()
         if width == 0:
             return
-
         left_trigger = int(width * 0.15)
         right_trigger = int(width * 0.85)
-
         if event.x < left_trigger:
             self.index = (self.index - 2) % len(self.movies)
-            self.root.after_cancel(self.timer)
+            if hasattr(self, 'timer'):
+                self.root.after_cancel(self.timer)
             self.update_display()
         elif event.x > right_trigger:
-            self.root.after_cancel(self.timer)
+            if hasattr(self, 'timer'):
+                self.root.after_cancel(self.timer)
             self.update_display()
         else:
             self.open_trailer(event)
@@ -292,9 +434,56 @@ class MoviePosterApp:
         delay_ms = int((next_refresh - now).total_seconds() * 1000)
         self.root.after(delay_ms, self.refresh_movies)
 
+    def refresh_movies(self):
+        now_playing = fetch_movies("now_playing")
 
+        coming_soon = []
+        for page in range(1, 6):
+            batch = fetch_movies("upcoming", page=page)
+            filtered = [
+                m for m in batch
+                if m.get("release_date") and datetime.strptime(m["release_date"], "%Y-%m-%d").date() > datetime.today().date()
+            ]
+            coming_soon.extend(filtered)
+        if len(coming_soon) > 20:
+            coming_soon = coming_soon[:20]
 
-import random
+        now_streaming = []
+        for page in range(1, 6):
+            batch = fetch_movies("popular", page=page)
+            filtered = [m for m in batch if get_streaming_provider(m["id"]) is not None]
+            now_streaming.extend(filtered)
+        if len(now_streaming) > 20:
+            now_streaming = now_streaming[:20]
+
+        movies = [*now_playing, *coming_soon, *now_streaming]
+        log(
+            f"Counts before poster filter: now_playing={len(now_playing)}, "
+            f"coming_soon={len(coming_soon)}, now_streaming={len(now_streaming)}, total={len(movies)}"
+        )
+        random.shuffle(movies)
+        movies = [m for m in movies if m.get("poster_path")]
+        log(f"With poster_path: {len(movies)}")
+
+        prepped = []
+        for m in movies:
+            img = get_poster_image(m["poster_path"])  # triggers download/cache
+            if not img:
+                log(f"No image for {m.get('title','?')} ({m['poster_path']})")
+                continue
+            if img.width < 800:
+                log(f"Skipping small image {img.width}px for {m.get('title','?')}")
+                continue
+            m["dominant_color"] = get_or_compute_dominant_color(m["poster_path"])  # cached
+            prepped.append(m)
+        log(f"Prepared movies: {len(prepped)}")
+
+        self.movies = prepped
+        self.index = 0
+        self.update_display()
+        self.schedule_daily_refresh()
+        self.schedule_auto_restart()
+
 
 if __name__ == "__main__":
     now_playing = fetch_movies("now_playing")
@@ -303,8 +492,8 @@ if __name__ == "__main__":
     for page in range(1, 6):
         batch = fetch_movies("upcoming", page=page)
         filtered = [
-            movie for movie in batch
-            if movie.get("release_date") and datetime.strptime(movie["release_date"], "%Y-%m-%d").date() > datetime.today().date()
+            m for m in batch
+            if m.get("release_date") and datetime.strptime(m["release_date"], "%Y-%m-%d").date() > datetime.today().date()
         ]
         coming_soon.extend(filtered)
     if len(coming_soon) > 20:
@@ -319,12 +508,26 @@ if __name__ == "__main__":
         now_streaming = now_streaming[:20]
 
     movies = now_playing + coming_soon + now_streaming
-    random.shuffle(movies)
-    movies = [
-        m for m in movies
-        if m.get("poster_path") and get_poster_image(m["poster_path"]) and get_poster_image(m["poster_path"]).width >= 1500
-    ]
+    log(
+        f"Startup counts: now_playing={len(now_playing)}, coming_soon={len(coming_soon)}, "
+        f"now_streaming={len(now_streaming)}, total={len(movies)}"
+    )
+
+    prepared = []
+    for m in movies:
+        if not m.get("poster_path"):
+            continue
+        img = get_poster_image(m["poster_path"])  # cache fetch
+        if not img or img.width < 800:
+            if img:
+                log(f"Startup skip small image {img.width}px for {m.get('title','?')}")
+            else:
+                log(f"Startup no image for {m.get('title','?')}")
+            continue
+        m["dominant_color"] = get_or_compute_dominant_color(m["poster_path"])  # cached
+        prepared.append(m)
+    log(f"Startup prepared movies: {len(prepared)}")
 
     root = tk.Tk()
-    app = MoviePosterApp(root, movies)
+    app = MoviePosterApp(root, prepared)
     root.mainloop()
