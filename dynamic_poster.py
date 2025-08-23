@@ -127,14 +127,14 @@ class MoviePosterApp:
         self.title_font_size = int(self.screen_height * 0.04)
         
         self.fixed_title_height = int(self.screen_height * 0.10)
-        self.title_border = tk.Frame(self.frame, bg="black", height=self.fixed_title_height + int(self.screen_height * 0.06), highlightthickness=12, highlightbackground="#FFD700", bd=0, relief="flat")
+        self.title_border = tk.Frame(self.frame, bg="black", height=self.fixed_title_height + int(self.screen_height * 0.06), highlightthickness=12, highlightbackground="#D4AF37", bd=0, relief="flat")
         self.title_border.pack(fill="x", expand=False, padx=0, pady=(0, 0))
 
         self.title_label = tk.Label(
             self.title_border,
             text="",
             font=("Broadway", self.title_font_size),
-            fg="#FFD700",
+            fg="#D4AF37",
             bg="black",
             wraplength=int(self.screen_height * 9 / 16),
             justify="center"
