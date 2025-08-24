@@ -50,7 +50,7 @@ class SplashScreen:
         except Exception:
             pass
 
-        # Load and scale image
+        # Load image (native size)
         sw = self.top.winfo_screenwidth()
         sh = self.top.winfo_screenheight()
         self._photo = None
@@ -58,21 +58,11 @@ class SplashScreen:
         try:
             p = image_path if os.path.isabs(image_path) else os.path.join(os.path.dirname(os.path.abspath(__file__)), image_path)
             img = Image.open(p)
-            # scale to ~60% of screen height, max 70% width
-            max_h = int(sh * 0.6)
-            ratio = (img.width / img.height) if img.height else 1.0
-            new_h = max_h
-            new_w = int(ratio * new_h)
-            max_w = int(sw * 0.7)
-            if new_w > max_w:
-                new_w = max_w
-                new_h = int(new_w / ratio) if ratio else max_h
-            if new_w > 0 and new_h > 0:
-                img = img.resize((new_w, new_h), Image.LANCZOS)
+            # Use native image size (no scaling)
             self._photo = ImageTk.PhotoImage(img)
             img_w, img_h = self._photo.width(), self._photo.height()
             self.img_label = tk.Label(self.top, image=self._photo, bg="black")
-            self.img_label.pack(expand=True, padx=20, pady=int(sh * 0.05))
+            self.img_label.pack(expand=True, padx=20, pady=int(sh * 0.03))
         except Exception as e:
             log("Splash image load failed:", e)
             self.img_label = tk.Label(self.top, text="", bg="black")
@@ -82,7 +72,7 @@ class SplashScreen:
         self.dots = 0
         font_size = max(12, int(sh * 0.025))  # half the previous size
         row = tk.Frame(self.top, bg="black")
-        row.pack(pady=int(sh * 0.02))
+        row.pack(pady=int(sh * 0.012))
         self.loading_label = tk.Label(row, text="Loading", font=("Consolas", font_size), fg="#D4AF37", bg="black")
         self.loading_label.pack(side="left")
         self.dots_label = tk.Label(row, text="", font=("Consolas", font_size), fg="#D4AF37", bg="black", width=3, anchor="w")
@@ -369,6 +359,28 @@ def get_or_compute_dominant_color(poster_path):
     return color
 
 # =====================================
+# Order mixing helpers
+# =====================================
+
+def interleave_by_category(items):
+    """Return a list that mixes categories (now_playing / upcoming / popular)
+    to avoid long streaks. Randomly shuffles within each bucket, then interleaves.
+    """
+    buckets = {}
+    for m in items:
+        cat = m.get("category", "misc")
+        buckets.setdefault(cat, []).append(m)
+    for lst in buckets.values():
+        random.shuffle(lst)
+    out = []
+    # pop one at a time from a random non-empty bucket
+    while any(buckets.values()):
+        nonempty = [k for k, v in buckets.items() if v]
+        k = random.choice(nonempty)
+        out.append(buckets[k].pop())
+    return out
+
+# =====================================
 # Govee Cloud API (simple)
 # =====================================
 GOVEE_API_KEY = os.environ.get("GOVEE_API_KEY", "")
@@ -632,7 +644,7 @@ class MoviePosterApp:
             f"Counts before poster filter: now_playing={len(now_playing)}, "
             f"coming_soon={len(coming_soon)}, now_streaming={len(now_streaming)}, total={len(movies)}"
         )
-        random.shuffle(movies)
+        log("Mixing across categories…")
         movies = [m for m in movies if m.get("poster_path")]
         log(f"With poster_path: {len(movies)}")
 
@@ -648,7 +660,8 @@ class MoviePosterApp:
             m["dominant_color"] = get_or_compute_dominant_color(m["poster_path"])  # cached
             prepped.append(m)
         log(f"Prepared movies: {len(prepped)}")
-
+        # Interleave by category for variety
+        prepped = interleave_by_category(prepped)
         self.movies = prepped
         self.index = 0
         self.update_display()
@@ -699,6 +712,8 @@ def prepare_movies():
         m["dominant_color"] = get_or_compute_dominant_color(m["poster_path"])  # cached
         prepared.append(m)
     log(f"Startup prepared movies: {len(prepared)}")
+    # Interleave by category for variety at startup
+    prepared = interleave_by_category(prepared)
     return prepared
 
 
