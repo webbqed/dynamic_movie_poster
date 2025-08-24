@@ -13,6 +13,7 @@ import threading
 import random
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import urlparse, parse_qs
+import time
 
 # =====================================
 # Working directory & cache setup
@@ -30,7 +31,117 @@ def log(*args):
         print("[DEBUG]", *args)
 
 # =====================================
-# Simple TV state webhook (for Home Assistant)
+# Splash Screen (boot-time)
+# =====================================
+class SplashScreen:
+    def __init__(self, root, image_path="splash_theater.png", min_ms=12000):
+        self.root = root
+        self.min_ms = int(min_ms)
+        self.top = tk.Toplevel(root)
+        # Borderless, centered window (no OS chrome)
+        try:
+            self.top.overrideredirect(True)
+        except Exception:
+            pass
+        self.top.configure(bg="black")
+        try:
+            # keep above until we position it; we’ll drop topmost shortly
+            self.top.attributes("-topmost", True)
+        except Exception:
+            pass
+
+        # Load and scale image
+        sw = self.top.winfo_screenwidth()
+        sh = self.top.winfo_screenheight()
+        self._photo = None
+        img_w = img_h = 0
+        try:
+            p = image_path if os.path.isabs(image_path) else os.path.join(os.path.dirname(os.path.abspath(__file__)), image_path)
+            img = Image.open(p)
+            # scale to ~60% of screen height, max 70% width
+            max_h = int(sh * 0.6)
+            ratio = (img.width / img.height) if img.height else 1.0
+            new_h = max_h
+            new_w = int(ratio * new_h)
+            max_w = int(sw * 0.7)
+            if new_w > max_w:
+                new_w = max_w
+                new_h = int(new_w / ratio) if ratio else max_h
+            if new_w > 0 and new_h > 0:
+                img = img.resize((new_w, new_h), Image.LANCZOS)
+            self._photo = ImageTk.PhotoImage(img)
+            img_w, img_h = self._photo.width(), self._photo.height()
+            self.img_label = tk.Label(self.top, image=self._photo, bg="black")
+            self.img_label.pack(expand=True, padx=20, pady=int(sh * 0.05))
+        except Exception as e:
+            log("Splash image load failed:", e)
+            self.img_label = tk.Label(self.top, text="", bg="black")
+            self.img_label.pack(expand=True, padx=20, pady=int(sh * 0.05))
+
+        # Loading row: static word + fixed-width dots so text doesn’t jump
+        self.dots = 0
+        font_size = max(12, int(sh * 0.025))  # half the previous size
+        row = tk.Frame(self.top, bg="black")
+        row.pack(pady=int(sh * 0.02))
+        self.loading_label = tk.Label(row, text="Loading", font=("Consolas", font_size), fg="#D4AF37", bg="black")
+        self.loading_label.pack(side="left")
+        self.dots_label = tk.Label(row, text="", font=("Consolas", font_size), fg="#D4AF37", bg="black", width=3, anchor="w")
+        self.dots_label.pack(side="left")
+
+        # Position window at the center based on requested size
+        self.top.update_idletasks()
+        w = max(self.top.winfo_reqwidth(), img_w + 40)
+        h = self.top.winfo_reqheight()
+        x = (sw - w) // 2
+        y = (sh - h) // 2
+        try:
+            self.top.geometry(f"{w}x{h}+{x}+{y}")
+        except Exception:
+            pass
+        try:
+            self.top.lift()
+            self.top.focus_force()
+            # release topmost after showing so other windows can appear later
+            self.top.after(200, lambda: self.top.attributes("-topmost", False))
+        except Exception:
+            pass
+
+        self._animate_id = None
+        self._min_elapsed = False
+        self._data_ready = False
+        self._animate()
+        # Ensure it stays up for at least min_ms
+        self.root.after(self.min_ms, self._set_min_elapsed)
+
+    def _animate(self):
+        self.dots = (self.dots % 3) + 1
+        self.dots_label.config(text="." * self.dots)
+        self._animate_id = self.top.after(500, self._animate)
+
+    def _set_min_elapsed(self):
+        self._min_elapsed = True
+        if self._data_ready:
+            self._destroy()
+
+    def done(self):
+        """Call when background preload is complete."""
+        self._data_ready = True
+        if self._min_elapsed:
+            self._destroy()
+
+    def _destroy(self):
+        try:
+            if self._animate_id:
+                self.top.after_cancel(self._animate_id)
+        except Exception:
+            pass
+        try:
+            self.top.destroy()
+        except Exception:
+            pass
+
+# =====================================
+# Simple TV state webhook (for Home Assistant) (for Home Assistant)
 # =====================================
 # Default: TV is OFF until HA tells us otherwise.
 TV_IS_ON = False
@@ -545,7 +656,8 @@ class MoviePosterApp:
         self.schedule_auto_restart()
 
 
-if __name__ == "__main__":
+def prepare_movies():
+    """Fetch TMDb lists, cache posters, precompute dominant colors, and return prepared list."""
     now_playing = fetch_movies("now_playing")
 
     coming_soon = []
@@ -587,7 +699,39 @@ if __name__ == "__main__":
         m["dominant_color"] = get_or_compute_dominant_color(m["poster_path"])  # cached
         prepared.append(m)
     log(f"Startup prepared movies: {len(prepared)}")
+    return prepared
+
+
+if __name__ == "__main__":
+    # Start webhook first
     start_tv_webhook_server()
+
+    # Create Tk early so we can show a splash while we preload
     root = tk.Tk()
-    app = MoviePosterApp(root, prepared)
+    # Hide the main window to avoid a white box before the splash
+    try:
+        root.withdraw()
+    except Exception:
+        pass
+
+    # Centered splash for at least 12 seconds with animated dots
+    splash = SplashScreen(root, image_path="splash_theater.png", min_ms=12000)
+
+    def _bg_prepare():
+        prepared = prepare_movies()
+        def _on_ready():
+            # Build the main app UI while root is still hidden
+            app = MoviePosterApp(root, prepared)
+            # Reveal the main window after UI is ready
+            try:
+                root.deiconify()
+                root.lift()
+            except Exception:
+                pass
+            splash.done()
+        root.after(0, _on_ready)
+
+    threading.Thread(target=_bg_prepare, daemon=True).start()
+
+    # Run the event loop (splash first, then main UI after preload + 12s)
     root.mainloop()
