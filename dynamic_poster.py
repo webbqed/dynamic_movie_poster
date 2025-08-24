@@ -607,7 +607,49 @@ class MoviePosterApp:
         self.root.after(four_hours_ms, self.restart_app)
 
     def restart_app(self):
-        os.execl(sys.executable, sys.executable, *sys.argv)
+        import subprocess, shutil
+    
+        try:
+            script = os.path.abspath(sys.argv[0])
+            exe = sys.executable
+    
+            # Prefer pythonw.exe on Windows to avoid a console window if available
+            exe_dir, exe_name = os.path.split(exe)
+            pythonw = os.path.join(exe_dir, "pythonw.exe")
+            if exe_name.lower().endswith("python.exe") and os.path.exists(pythonw):
+                exe = pythonw
+    
+            # Rebuild argv: interpreter + script + original args (excluding argv[0])
+            args = [exe, script] + sys.argv[1:]
+    
+            # Ensure we restart in the script directory
+            cwd = os.path.dirname(script)
+    
+            log(f"Restarting via spawn: {args} (cwd={cwd})")
+    
+            # CREATE_NO_WINDOW = 0x08000000 (keeps things quiet if exe is python.exe)
+            creationflags = 0x08000000
+    
+            subprocess.Popen(
+                args,
+                cwd=cwd,
+                close_fds=True,
+                creationflags=creationflags
+            )
+        except Exception as e:
+            log("Spawn restart failed; falling back to os.execl:", e)
+            try:
+                os.execl(sys.executable, sys.executable, *sys.argv)
+            except Exception as e2:
+                log("os.execl also failed:", e2)
+        finally:
+            try:
+                self.root.destroy()
+            except Exception:
+                pass
+            # Hard-exit so the old process fully dies and frees any resources/ports
+            os._exit(0)
+
 
     def schedule_daily_refresh(self):
         now = datetime.now()
