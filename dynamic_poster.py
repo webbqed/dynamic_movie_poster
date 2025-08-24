@@ -11,6 +11,8 @@ import webbrowser
 import json
 import threading
 import random
+from http.server import BaseHTTPRequestHandler, HTTPServer
+from urllib.parse import urlparse, parse_qs
 
 # =====================================
 # Working directory & cache setup
@@ -26,6 +28,61 @@ DEBUG = True
 def log(*args):
     if DEBUG:
         print("[DEBUG]", *args)
+
+# =====================================
+# Simple TV state webhook (for Home Assistant)
+# =====================================
+# Default: TV is OFF until HA tells us otherwise.
+TV_IS_ON = False
+
+# Configure via environment variables:
+#   TV_WEBHOOK_PORT  (default 8754)
+#   TV_WEBHOOK_BIND  (default "0.0.0.0")
+#   TV_WEBHOOK_TOKEN (optional; if set, requests must include ?token=...)
+WEBHOOK_PORT = int(os.environ.get("TV_WEBHOOK_PORT", "8754"))
+WEBHOOK_BIND = os.environ.get("TV_WEBHOOK_BIND", "0.0.0.0")
+WEBHOOK_TOKEN = os.environ.get("TV_WEBHOOK_TOKEN", "")
+
+class TVStateHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        global TV_IS_ON
+        try:
+            parsed = urlparse(self.path)
+            if parsed.path not in ("/state", "/tv/state"):
+                self.send_response(404); self.end_headers(); return
+
+            qs = parse_qs(parsed.query or "")
+            token_ok = True if not WEBHOOK_TOKEN else (qs.get("token", [None])[0] == WEBHOOK_TOKEN)
+            if not token_ok:
+                self.send_response(403); self.end_headers(); self.wfile.write(b"Forbidden"); return
+
+            tv = (qs.get("tv", [None])[0] or "").lower()
+            if tv not in ("on", "off"):
+                self.send_response(400); self.end_headers(); self.wfile.write(b"Use ?tv=on|off&token=..."); return
+
+            TV_IS_ON = (tv == "on")
+            log(f"Webhook: TV_IS_ON set to {TV_IS_ON}")
+            self.send_response(200); self.end_headers(); self.wfile.write(f"ok:{TV_IS_ON}".encode("utf-8"))
+        except Exception as e:
+            log("Webhook error:", e)
+            try:
+                self.send_response(500); self.end_headers()
+            except Exception:
+                pass
+
+    def log_message(self, format, *args):
+        # Silence default HTTPServer logging; we use our own logger
+        return
+
+def start_tv_webhook_server():
+    try:
+        server = HTTPServer((WEBHOOK_BIND, WEBHOOK_PORT), TVStateHandler)
+    except Exception as e:
+        log("TV webhook bind failed:", e)
+        return
+    t = threading.Thread(target=server.serve_forever, daemon=True)
+    t.start()
+    log(f"TV webhook listening on {WEBHOOK_BIND}:{WEBHOOK_PORT} (token={'set' if WEBHOOK_TOKEN else 'not set'})")
 
 # Load/save color cache (poster_path filename -> {r,g,b})
 try:
@@ -390,7 +447,10 @@ class MoviePosterApp:
 
         # Update Govee immediately (dominant color precomputed at load time when possible)
         rgb = movie.get("dominant_color") or get_or_compute_dominant_color(movie["poster_path"])
-        self._update_govee_async(rgb)
+        if TV_IS_ON:
+            self._update_govee_async(rgb)
+        else:
+            log("TV off (TV_IS_ON=False); skipping Govee color update.")
 
         self.index = (self.index + 1) % len(self.movies)
         self.timer = self.root.after(15000, self.update_display)
@@ -527,7 +587,7 @@ if __name__ == "__main__":
         m["dominant_color"] = get_or_compute_dominant_color(m["poster_path"])  # cached
         prepared.append(m)
     log(f"Startup prepared movies: {len(prepared)}")
-
+    start_tv_webhook_server()
     root = tk.Tk()
     app = MoviePosterApp(root, prepared)
     root.mainloop()
