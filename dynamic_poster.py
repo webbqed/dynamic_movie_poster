@@ -34,10 +34,11 @@ def log(*args):
 # Splash Screen (boot-time)
 # =====================================
 class SplashScreen:
-    def __init__(self, root, image_path="splash_theater.png", min_ms=12000):
+    def __init__(self, root, image_path="splash_theater.png", min_ms=12000, on_close=None):
         self.root = root
         self.min_ms = int(min_ms)
         self.top = tk.Toplevel(root)
+        self.on_close = on_close
         # Borderless, centered window (no OS chrome)
         try:
             self.top.overrideredirect(True)
@@ -127,6 +128,12 @@ class SplashScreen:
             pass
         try:
             self.top.destroy()
+        except Exception:
+            pass
+        # Notify that splash has closed so the main window can claim focus cleanly
+        try:
+            if callable(self.on_close):
+                self.root.after(0, self.on_close)
         except Exception:
             pass
 
@@ -487,9 +494,23 @@ class MoviePosterApp:
         )
         close_button.place(relx=1.0, y=1, anchor="ne")
 
+        # Claim foreground to avoid taskbar sticking/attention highlight
+        self.root.after(50, self._claim_foreground)
+
         self.root.after(100, self.update_display)
         self.schedule_daily_refresh()
         self.schedule_auto_restart()
+
+    def _claim_foreground(self):
+        try:
+            self.root.lift()
+            self.root.attributes("-topmost", True)
+            self.root.focus_force()
+            self.root.update_idletasks()
+            # Give Windows a moment, then release topmost so dialogs work normally
+            self.root.after(300, lambda: self.root.attributes("-topmost", False))
+        except Exception:
+            pass
 
     def skip_to_next(self):
         if hasattr(self, 'timer'):
@@ -745,7 +766,7 @@ def prepare_movies():
         if not m.get("poster_path"):
             continue
         img = get_poster_image(m["poster_path"])  # cache fetch
-        if not img or img.width < 800:
+        if not img or img.width < 1400:
             if img:
                 log(f"Startup skip small image {img.width}px for {m.get('title','?')}")
             else:
@@ -776,19 +797,30 @@ if __name__ == "__main__":
 
     def _bg_prepare():
         prepared = prepare_movies()
-        def _on_ready():
-            # Build the main app UI while root is still hidden
+
+        def _launch_main():
+            # Build the main app UI only after the splash is fully closed
             app = MoviePosterApp(root, prepared)
-            # Reveal the main window after UI is ready
             try:
                 root.deiconify()
                 root.lift()
+                # Force focus/foreground and ensure fullscreen takes over taskbar
+                root.attributes("-fullscreen", True)
+                root.attributes("-topmost", True)
+                root.focus_force()
+                root.after(300, lambda: root.attributes("-topmost", False))
             except Exception:
                 pass
+
+        def _assign_and_done():
+            # When the splash closes (min time reached AND data ready), launch main
+            splash.on_close = _launch_main
             splash.done()
-        root.after(0, _on_ready)
+
+        root.after(0, _assign_and_done)
 
     threading.Thread(target=_bg_prepare, daemon=True).start()
 
     # Run the event loop (splash first, then main UI after preload + 12s)
     root.mainloop()
+
