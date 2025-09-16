@@ -3,6 +3,7 @@
 import os
 import sys
 import tkinter as tk
+import platform
 from PIL import Image, ImageTk
 import requests
 from io import BytesIO
@@ -29,6 +30,36 @@ DEBUG = True
 def log(*args):
     if DEBUG:
         print("[DEBUG]", *args)
+
+# =====================================
+# Windows taskbar attention helper (no-op on non-Windows)
+# =====================================
+
+def _stop_taskbar_attention(root):
+    """On some Windows restarts, the taskbar icon stays highlighted (needs-attention).
+    This sends a FlashWindowEx STOP to clear it. Safe no-op elsewhere."""
+    try:
+        if platform.system() != "Windows":
+            return
+        import ctypes
+        from ctypes import wintypes
+        user32 = ctypes.windll.user32
+
+        class FLASHWINFO(ctypes.Structure):
+            _fields_ = [
+                ("cbSize", wintypes.UINT),
+                ("hwnd", wintypes.HWND),
+                ("dwFlags", wintypes.DWORD),
+                ("uCount", wintypes.UINT),
+                ("dwTimeout", wintypes.DWORD),
+            ]
+        FLASHW_STOP = 0
+        hwnd = root.winfo_id()
+        f = FLASHWINFO(ctypes.sizeof(FLASHWINFO), hwnd, FLASHW_STOP, 0, 0)
+        user32.FlashWindowEx(ctypes.byref(f))
+    except Exception:
+        # best-effort only
+        pass
 
 # =====================================
 # Splash Screen (boot-time)
@@ -496,6 +527,8 @@ class MoviePosterApp:
 
         # Claim foreground to avoid taskbar sticking/attention highlight
         self.root.after(50, self._claim_foreground)
+        # Re-assert fullscreen/topmost a few times after launch to defeat the taskbar
+        self.root.after(150, lambda: self._settle_fullscreen_loop(tries=10))
 
         self.root.after(100, self.update_display)
         self.schedule_daily_refresh()
@@ -511,6 +544,23 @@ class MoviePosterApp:
             self.root.after(300, lambda: self.root.attributes("-topmost", False))
         except Exception:
             pass
+
+    def _settle_fullscreen_loop(self, tries=8):
+        """On some Windows builds, Explorer/taskbar can briefly float above a
+        just-launched Tk window (especially after self-restarts). We reassert
+        fullscreen/topmost a handful of times with short delays to ensure our
+        window ends above the taskbar, then stop."""
+        try:
+            self.root.attributes("-fullscreen", True)
+            self.root.lift()
+            self.root.focus_force()
+            self.root.attributes("-topmost", True)
+            # release shortly so normal z-order resumes
+            self.root.after(200, lambda: self.root.attributes("-topmost", False))
+        except Exception:
+            pass
+        if tries > 0:
+            self.root.after(400, lambda: self._settle_fullscreen_loop(tries=tries-1))
 
     def skip_to_next(self):
         if hasattr(self, 'timer'):
@@ -809,6 +859,10 @@ if __name__ == "__main__":
                 root.attributes("-topmost", True)
                 root.focus_force()
                 root.after(300, lambda: root.attributes("-topmost", False))
+                # Clear any taskbar attention state that might remain from restart
+                _stop_taskbar_attention(root)
+                # And keep nudging fullscreen/topmost briefly after launch
+                root.after(150, lambda: app._settle_fullscreen_loop(tries=10))
             except Exception:
                 pass
 
@@ -823,4 +877,5 @@ if __name__ == "__main__":
 
     # Run the event loop (splash first, then main UI after preload + 12s)
     root.mainloop()
+
 
