@@ -62,6 +62,88 @@ def _stop_taskbar_attention(root):
         pass
 
 # =====================================
+# Fullscreen stabilizer (Windows) — defeats taskbar-on-top after relaunch
+# =====================================
+try:
+    if sys.platform == 'win32':
+        import ctypes
+        try:
+            import win32gui, win32con  # optional: pip install pywin32
+        except Exception:
+            win32gui = None
+    else:
+        win32gui = None
+except Exception:
+    win32gui = None
+
+class FullscreenStabilizer:
+    def __init__(self, root: tk.Tk):
+        self.root = root
+
+    def _win32_nudge(self):
+        if win32gui is None or sys.platform != 'win32':
+            return
+        try:
+            hwnd = ctypes.windll.user32.GetParent(self.root.winfo_id())
+            # TOPMOST -> NOTOPMOST forces shell to reconsider z-order
+            win32gui.SetWindowPos(hwnd, win32con.HWND_TOPMOST, 0,0,0,0,
+                                  win32con.SWP_NOMOVE|win32con.SWP_NOSIZE|win32con.SWP_SHOWWINDOW)
+            win32gui.SetWindowPos(hwnd, win32con.HWND_NOTOPMOST, 0,0,0,0,
+                                  win32con.SWP_NOMOVE|win32con.SWP_NOSIZE|win32con.SWP_SHOWWINDOW)
+            win32gui.ShowWindow(hwnd, win32con.SW_SHOW)
+            try:
+                win32gui.SetForegroundWindow(hwnd)
+            except Exception:
+                pass
+        except Exception:
+            pass
+
+    def show_stable_fullscreen(self):
+        r = self.root
+        # start hidden and non-override to avoid races
+        try:
+            r.withdraw()
+            r.overrideredirect(False)
+            r.attributes('-alpha', 0.0)
+        except Exception:
+            pass
+        r.update_idletasks()
+
+        def stage1():
+            try:
+                r.deiconify(); r.lift(); r.focus_force()
+                r.attributes('-topmost', True)
+                r.attributes('-fullscreen', True)
+                r.update_idletasks()
+            except Exception:
+                pass
+
+        def stage2():
+            try:
+                r.attributes('-topmost', False)
+                r.attributes('-alpha', 1.0)
+            except Exception:
+                pass
+            self._win32_nudge()
+
+        def reassert():
+            try:
+                r.attributes('-topmost', True)
+                r.update_idletasks()
+                r.attributes('-fullscreen', False)
+                r.update_idletasks()
+                r.attributes('-fullscreen', True)
+                r.after(400, lambda: r.attributes('-topmost', False))
+            except Exception:
+                pass
+            self._win32_nudge()
+
+        r.after(150, stage1)
+        r.after(700, stage2)
+        r.after(2000, reassert)
+        r.after(5000, reassert)
+
+# =====================================
 # Splash Screen (boot-time)
 # =====================================
 class SplashScreen:
@@ -463,7 +545,8 @@ class MoviePosterApp:
 
     def __init__(self, root, movies):
         self.root = root
-        self.root.attributes('-fullscreen', True)
+        # Do NOT enter fullscreen here; the stabilizer will handle it after UI is ready
+
         self.root.title("Now Playing & Coming Soon")
         self.movies = movies
         self.index = 0
@@ -540,23 +623,7 @@ class MoviePosterApp:
             self.root.attributes("-topmost", True)
             self.root.focus_force()
             self.root.update_idletasks()
-            # Give Windows a moment, then release topmost so dialogs work normally
             self.root.after(300, lambda: self.root.attributes("-topmost", False))
-        except Exception:
-            pass
-
-    def _settle_fullscreen_loop(self, tries=8):
-        """On some Windows builds, Explorer/taskbar can briefly float above a
-        just-launched Tk window (especially after self-restarts). We reassert
-        fullscreen/topmost a handful of times with short delays to ensure our
-        window ends above the taskbar, then stop."""
-        try:
-            self.root.attributes("-fullscreen", True)
-            self.root.lift()
-            self.root.focus_force()
-            self.root.attributes("-topmost", True)
-            # release shortly so normal z-order resumes
-            self.root.after(200, lambda: self.root.attributes("-topmost", False))
         except Exception:
             pass
         if tries > 0:
@@ -852,17 +919,10 @@ if __name__ == "__main__":
             # Build the main app UI only after the splash is fully closed
             app = MoviePosterApp(root, prepared)
             try:
-                root.deiconify()
-                root.lift()
-                # Force focus/foreground and ensure fullscreen takes over taskbar
-                root.attributes("-fullscreen", True)
-                root.attributes("-topmost", True)
-                root.focus_force()
-                root.after(300, lambda: root.attributes("-topmost", False))
-                # Clear any taskbar attention state that might remain from restart
+                # Clear any lingering taskbar attention
                 _stop_taskbar_attention(root)
-                # And keep nudging fullscreen/topmost briefly after launch
-                root.after(150, lambda: app._settle_fullscreen_loop(tries=10))
+                # Use the fullscreen stabilizer to stage mapping + reassert
+                FullscreenStabilizer(root).show_stable_fullscreen()
             except Exception:
                 pass
 
@@ -877,5 +937,6 @@ if __name__ == "__main__":
 
     # Run the event loop (splash first, then main UI after preload + 12s)
     root.mainloop()
+
 
 
