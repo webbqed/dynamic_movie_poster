@@ -626,8 +626,24 @@ class MoviePosterApp:
             self.root.after(300, lambda: self.root.attributes("-topmost", False))
         except Exception:
             pass
-        if tries > 0:
-            self.root.after(400, lambda: self._settle_fullscreen_loop(tries=tries-1))
+
+    def _settle_fullscreen_loop(self, tries=8):
+        """Reassert fullscreen/topmost a few times while Explorer calms down.
+        Also clears any lingering taskbar attention highlight."""
+        if tries <= 0:
+            return
+        try:
+            self.root.attributes("-topmost", True)
+            self.root.update_idletasks()
+            self.root.attributes("-fullscreen", False)
+            self.root.update_idletasks()
+            self.root.attributes("-fullscreen", True)
+            self.root.after(400, lambda: self.root.attributes("-topmost", False))
+            _stop_taskbar_attention(self.root)
+        except Exception:
+            pass
+        # Keep trying briefly
+        self.root.after(600, lambda: self._settle_fullscreen_loop(tries=tries-1))
 
     def skip_to_next(self):
         if hasattr(self, 'timer'):
@@ -745,47 +761,50 @@ class MoviePosterApp:
         self.root.after(four_hours_ms, self.restart_app)
 
     def restart_app(self):
-        import subprocess, shutil
-    
+        """Restart in a way that preserves foreground rights when possible.
+        Prefer in-process exec replacement; fall back to spawn+AllowSetForegroundWindow."""
+        import subprocess
         try:
             script = os.path.abspath(sys.argv[0])
             exe = sys.executable
-    
-            # Prefer pythonw.exe on Windows to avoid a console window if available
-            exe_dir, exe_name = os.path.split(exe)
-            pythonw = os.path.join(exe_dir, "pythonw.exe")
-            if exe_name.lower().endswith("python.exe") and os.path.exists(pythonw):
-                exe = pythonw
-    
-            # Rebuild argv: interpreter + script + original args (excluding argv[0])
-            args = [exe, script] + sys.argv[1:]
-    
-            # Ensure we restart in the script directory
+
+            # Prefer pythonw.exe on Windows to avoid console window
+            if sys.platform == 'win32':
+                exe_dir, exe_name = os.path.split(exe)
+                pythonw = os.path.join(exe_dir, "pythonw.exe")
+                exe_to_use = pythonw if exe_name.lower().endswith("python.exe") and os.path.exists(pythonw) else exe
+            else:
+                exe_to_use = exe
+
+            # First try: in-place exec replacement (keeps foreground)
+            try:
+                os.execl(exe_to_use, exe_to_use, *sys.argv)
+            except Exception as e_exec:
+                log("os.execl failed, falling back to spawn:", e_exec)
+
+            # Fallback: spawn a new process
+            args = [exe_to_use, script] + sys.argv[1:]
             cwd = os.path.dirname(script)
-    
-            log(f"Restarting via spawn: {args} (cwd={cwd})")
-    
-            # CREATE_NO_WINDOW = 0x08000000 (keeps things quiet if exe is python.exe)
-            creationflags = 0x08000000
-    
-            subprocess.Popen(
+            creationflags = 0x08000000 if sys.platform == 'win32' else 0  # CREATE_NO_WINDOW
+            proc = subprocess.Popen(
                 args,
                 cwd=cwd,
                 close_fds=True,
                 creationflags=creationflags
             )
-        except Exception as e:
-            log("Spawn restart failed; falling back to os.execl:", e)
-            try:
-                os.execl(sys.executable, sys.executable, *sys.argv)
-            except Exception as e2:
-                log("os.execl also failed:", e2)
+
+            # On Windows, explicitly allow the child to set foreground
+            if sys.platform == 'win32':
+                try:
+                    import ctypes
+                    ctypes.windll.user32.AllowSetForegroundWindow(proc.pid)
+                except Exception:
+                    pass
         finally:
             try:
                 self.root.destroy()
             except Exception:
                 pass
-            # Hard-exit so the old process fully dies and frees any resources/ports
             os._exit(0)
 
 
