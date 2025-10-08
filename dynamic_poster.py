@@ -79,6 +79,7 @@ except Exception:
 class FullscreenStabilizer:
     def __init__(self, root: tk.Tk):
         self.root = root
+        self._clear_attempts = 0
 
     def _win32_nudge(self):
         if win32gui is None or sys.platform != 'win32':
@@ -91,12 +92,15 @@ class FullscreenStabilizer:
             win32gui.SetWindowPos(hwnd, win32con.HWND_NOTOPMOST, 0,0,0,0,
                                   win32con.SWP_NOMOVE|win32con.SWP_NOSIZE|win32con.SWP_SHOWWINDOW)
             win32gui.ShowWindow(hwnd, win32con.SW_SHOW)
-            try:
-                win32gui.SetForegroundWindow(hwnd)
-            except Exception:
-                pass
         except Exception:
             pass
+
+    def _clear_attention_loop(self, tries=12, delay=250):
+        # Repeatedly send FlashWindowEx STOP to kill the orange/red highlight while starting up
+        if tries <= 0:
+            return
+        _stop_taskbar_attention(self.root)
+        self.root.after(delay, lambda: self._clear_attention_loop(tries-1, delay))
 
     def show_stable_fullscreen(self):
         r = self.root
@@ -111,10 +115,18 @@ class FullscreenStabilizer:
 
         def stage1():
             try:
-                r.deiconify(); r.lift(); r.focus_force()
+                r.deiconify(); r.lift()
                 r.attributes('-topmost', True)
                 r.attributes('-fullscreen', True)
                 r.update_idletasks()
+                # On Windows, show without activating first to avoid attention flash
+                if sys.platform == 'win32' and win32gui is not None:
+                    try:
+                        hwnd = ctypes.windll.user32.GetParent(r.winfo_id())
+                        import win32con
+                        win32gui.ShowWindow(hwnd, win32con.SW_SHOWNOACTIVATE)
+                    except Exception:
+                        pass
             except Exception:
                 pass
 
@@ -124,24 +136,18 @@ class FullscreenStabilizer:
                 r.attributes('-alpha', 1.0)
             except Exception:
                 pass
-            self._win32_nudge()
-
-        def reassert():
+            # After visible, gently request focus once
             try:
-                r.attributes('-topmost', True)
-                r.update_idletasks()
-                r.attributes('-fullscreen', False)
-                r.update_idletasks()
-                r.attributes('-fullscreen', True)
-                r.after(400, lambda: r.attributes('-topmost', False))
+                r.focus_set()
             except Exception:
                 pass
+            # Nudge z-order once without repeated toggles
             self._win32_nudge()
+            # Stop any lingering attention highlight (single attempt)
+            _stop_taskbar_attention(r)
 
         r.after(150, stage1)
-        r.after(700, stage2)
-        r.after(2000, reassert)
-        r.after(5000, reassert)
+        r.after(900, stage2)
 
 # =====================================
 # Splash Screen (boot-time)
@@ -204,9 +210,9 @@ class SplashScreen:
             pass
         try:
             self.top.lift()
-            self.top.focus_force()
-            # release topmost after showing so other windows can appear later
-            self.top.after(200, lambda: self.top.attributes("-topmost", False))
+            # Avoid forcing focus; doing so can trigger Windows taskbar attention flashing
+            # release topmost shortly after showing so other windows can appear later
+            self.top.after(120, lambda: self.top.attributes("-topmost", False))
         except Exception:
             pass
 
@@ -610,40 +616,19 @@ class MoviePosterApp:
 
         # Claim foreground to avoid taskbar sticking/attention highlight
         self.root.after(50, self._claim_foreground)
-        # Re-assert fullscreen/topmost a few times after launch to defeat the taskbar
-        self.root.after(150, lambda: self._settle_fullscreen_loop(tries=10))
+        # (Removed early aggressive focus/topmost reasserts to avoid flashing)
 
         self.root.after(100, self.update_display)
         self.schedule_daily_refresh()
         self.schedule_auto_restart()
 
     def _claim_foreground(self):
-        try:
-            self.root.lift()
-            self.root.attributes("-topmost", True)
-            self.root.focus_force()
-            self.root.update_idletasks()
-            self.root.after(300, lambda: self.root.attributes("-topmost", False))
-        except Exception:
-            pass
+        # No-op: removed force-focus to reduce Windows taskbar flashing
+        return
 
     def _settle_fullscreen_loop(self, tries=8):
-        """Reassert fullscreen/topmost a few times while Explorer calms down.
-        Also clears any lingering taskbar attention highlight."""
-        if tries <= 0:
-            return
-        try:
-            self.root.attributes("-topmost", True)
-            self.root.update_idletasks()
-            self.root.attributes("-fullscreen", False)
-            self.root.update_idletasks()
-            self.root.attributes("-fullscreen", True)
-            self.root.after(400, lambda: self.root.attributes("-topmost", False))
-            _stop_taskbar_attention(self.root)
-        except Exception:
-            pass
-        # Keep trying briefly
-        self.root.after(600, lambda: self._settle_fullscreen_loop(tries=tries-1))
+        # No-op: aggressive reassert loop removed to prevent repeated flashes
+        return
 
     def skip_to_next(self):
         if hasattr(self, 'timer'):
@@ -759,41 +744,69 @@ class MoviePosterApp:
     def schedule_auto_restart(self):
         four_hours_ms = 4 * 60 * 60 * 1000
         self.root.after(four_hours_ms, self.restart_app)
+        # Dev hotkey to test restart quickly
+        self.root.bind_all('<Control-r>', lambda e: self.restart_app())
 
     def restart_app(self):
-        """Restart in a way that preserves foreground rights when possible.
-        Prefer in-process exec replacement; fall back to spawn+AllowSetForegroundWindow."""
+        """Reliable restart on Windows, robust to spaces & Anaconda.
+        Strategy: spawn a new interpreter (no shell) with absolute script path,
+        explicitly grant foreground permission *before* spawn to stop taskbar flashing,
+        then exit this process after tearing down Tk.
+        """
         import subprocess
+        # 1) Stop scheduling new work
+        try:
+            self.shutting_down = True
+        except Exception:
+            pass
+        # Cancel known timers
+        try:
+            if hasattr(self, 'timer') and self.timer:
+                self.root.after_cancel(self.timer)
+        except Exception:
+            pass
+        # Best-effort: cancel most pending 'after' callbacks we created
+        for fn in (getattr(self, 'update_display', None), getattr(self, 'refresh_movies', None), getattr(self, 'restart_app', None)):
+            try:
+                if fn:
+                    self.root.after_cancel(fn)
+            except Exception:
+                pass
+
         try:
             script = os.path.abspath(sys.argv[0])
             exe = sys.executable
 
-            # Prefer pythonw.exe on Windows to avoid console window
+            # Prefer pythonw.exe on Windows to avoid console window, else sys.executable
             if sys.platform == 'win32':
                 exe_dir, exe_name = os.path.split(exe)
-                pythonw = os.path.join(exe_dir, "pythonw.exe")
-                exe_to_use = pythonw if exe_name.lower().endswith("python.exe") and os.path.exists(pythonw) else exe
+                pythonw = os.path.join(exe_dir, 'pythonw.exe')
+                exe_to_use = pythonw if os.path.exists(pythonw) else exe
+                creationflags = 0x08000000  # CREATE_NO_WINDOW
+                # Critical: allow ANY process to set foreground next to avoid Explorer flashing the button
+                try:
+                    import ctypes
+                    ASFW_ANY = 0xFFFFFFFF
+                    ctypes.windll.user32.AllowSetForegroundWindow(ASFW_ANY)
+                except Exception:
+                    pass
             else:
                 exe_to_use = exe
+                creationflags = 0
 
-            # First try: in-place exec replacement (keeps foreground)
-            try:
-                os.execl(exe_to_use, exe_to_use, *sys.argv)
-            except Exception as e_exec:
-                log("os.execl failed, falling back to spawn:", e_exec)
+            argv = [exe_to_use, script] + sys.argv[1:]
 
-            # Fallback: spawn a new process
-            args = [exe_to_use, script] + sys.argv[1:]
+            log('Restart spawn:', argv)
             cwd = os.path.dirname(script)
-            creationflags = 0x08000000 if sys.platform == 'win32' else 0  # CREATE_NO_WINDOW
+            env = os.environ.copy()
             proc = subprocess.Popen(
-                args,
+                argv,
                 cwd=cwd,
                 close_fds=True,
-                creationflags=creationflags
+                creationflags=creationflags,
+                env=env,
+                shell=False
             )
-
-            # On Windows, explicitly allow the child to set foreground
             if sys.platform == 'win32':
                 try:
                     import ctypes
